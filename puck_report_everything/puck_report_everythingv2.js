@@ -1,9 +1,19 @@
 // broadcast all Espruino sensor values as BLE aligning with these names:
 // https://reelyactive.github.io/diy/cheatsheet/ 
+
+
+/***********************************************
+ * CONSTANTS
+ ***********************************************/
+
+/***********************************************
+ * CONSTANTS FOR ACCELERATION AND BATTERY
+ ***********************************************/
+
 const INSTANCE_ID = null; // null = auto-generated.  Or specify ID with:
                           // new Uint8Array([ 0x00, 0x00, 0x00, 0x01 ]);
 
-const ACC_SAMPLE_RATE_HZ = 12.5; // Valid values are 1.6, 12.5, 26, 52, 104, 208
+const ACC_SAMPLE_RATE_HZ = 1.6; // Valid values are 1.6, 12.5, 26, 52, 104, 208
 const LED_BLINK_MILLISECONDS = 50;
 const POLL_QUEUE_MIILISECONDS = 50;
 const INVALID_ACCELERATION_CODE = 0x20;
@@ -21,26 +31,68 @@ const DIRACT_INSTANCE_LENGTH = 4;
 const DIRACT_INSTANCE_OFFSET = 2;
 const BITS_PER_BYTE = 8;
 const EDDYSTONE_INSTANCE_OFFSET = 14;
+/***********************************************
+ * END CONSTANTS FOR ACCELERATION AND BATTERY
+ ***********************************************/
 
+/***********************************************
+ * END CONSTANTS
+ ***********************************************/
+
+
+/***********************************************
+ * GLOBAL VARIABLES AND OBJECTS
+ ***********************************************/
 // the queue class
 let queue = false;
 
-// accelerometer
+/***********************************************
+ * GLOBAL VARIABLES AND OBJECTS - FOR ACCELERATION AND BATTERY
+ ***********************************************/
 let accelPackage = false;
 let accelPollMS = 100;
-let accelDuration = 500;
+let accelDurationMS = 500;
 
 // these will hold dynscale objects
 // to scale the values of the inputs
 let accelScaleX = false;
 let accelScaleY = false;
 let accelScaleZ = false;
-
+let accelPriority = 3;
 let instanceId = null;
+/***********************************************
+ * END GLOBAL VARIABLES AND OBJECTS - FOR ACCELERATION AND BATTERY
+ ***********************************************/
+// accelerometer
+let illumPackage = false;
+let illumSendMS = 500;
+let illumReadMS = 200;
+let illumDurationMS = 500;
+let illumPriority = 3;
+
+// these will hold dynscale objects
+// to scale the values of the inputs
+let illumScale = false;
+/***********************************************
+ * GLOBAL VARIABLES AND OBJECTS - FOR ILLUMINATION
+ ***********************************************/
 
 
+/***********************************************
+ * END GLOBAL VARIABLES AND OBJECTS
+ ***********************************************/
+
+
+
+/***********************************************
+ * GENERAL FUNCTIONS
+ ***********************************************/
 // called once all the code is loaded.
 function startup() {
+
+  // flash the led
+  LED2.write(true);
+  setTimeout(function() { LED2.write(false); }, LED_BLINK_MILLISECONDS);
 
   // create the instanceID
   instanceId = autoInstanceId();
@@ -48,11 +100,67 @@ function startup() {
   if(!queue){
     queue = new BLEQueue();
   }
+
+  // make a setup function for each sensor and call it here.
   setupAcceleration();
+ // setupIllumination();
+  
+  setInterval(function(){
+    queue.pollQueue(), 
+    POLL_QUEUE_MIILISECONDS
+  });  
   
 }
+/***********************************************
+ * END GENERAL FUNCTIONS
+ ***********************************************/
+
+/***********************************************
+ * SENSOR-SPECIFIC FUNCTIONS
+ ***********************************************/
+
+/***********************************************
+ * ILLUMINATION: LIGHT SENSOR
+ ***********************************************/
+function setupIllumination(){
+  illumScale = new dynScale(false, false, 0, 100);
+  setInterval(readIllumination, illumReadMS);
+  setInterval(sendIllumination, illumSendMS);
+}
+
+function readIllumination(){
+  let illumValue = Puck.light();
+  illumValue = Math.round(illumScale.scale(illumValue));
+  illumPackage = {illuminance : illumValue};
+}
+
+function sendIllumination(){
+  console.log("adding illum to queue")
+  queue.addToQueue("illum", illumPriority, illumDurationMS, "replace", 
+    function(){
+      return illumPackage;
+    }, 
+    function(item){
+      let advertisingOptions = {
+        interval: item.interval,
+        showName: false,
+        manufacturer: 0x0590, // 0x0590 or DIRACT_MANUFACTURER_ID
+      };
+
+      advertisingOptions.manufacturerData = JSON.stringify(item.data);
+      console.log("sending illum" , advertisingOptions);
+      NRF.setAdvertising({}, advertisingOptions);         // Start advertising    
+    }
+  );
+}
+/***********************************************
+ * END ILLUMINATION: LIGHT SENSOR
+ ***********************************************/
 
 
+/***********************************************
+ * ACCELERATION AND BATTERY
+ ***********************************************/
 function setupAcceleration(){
 
   // start tracking acceleration.
@@ -60,15 +168,6 @@ function setupAcceleration(){
   Puck.on('accel', handleAcceleration);
   
   Puck.accelOn(ACC_SAMPLE_RATE_HZ);
-
-  // flash the led
-  LED2.write(true);
-  setTimeout(function() { LED2.write(false); }, LED_BLINK_MILLISECONDS);
-  
-  setInterval(function(){
-    queue.pollQueue(), 
-    POLL_QUEUE_MIILISECONDS
-  });
   
   // initialized the acceleration Scaling classes.
   accelScaleX = new dynScale(false, false, 0,1);
@@ -122,7 +221,6 @@ function encodeAcceleration(acc) {
   return encodedAcceleration;
 }
 
-
 /**
  * Encode the battery percentage.
  * @return {Number} The battery percentage.
@@ -143,7 +241,7 @@ function encodeBatteryPercentage() {
 
   
 function sendAcceleration(){
-  queue.addToQueue("accel", 3, accelDuration, "replace", 
+  queue.addToQueue("accel", accelPriority, accelDurationMS, "replace", 
     function(){
       return accelPackage;
     }, 
@@ -155,7 +253,7 @@ function sendAcceleration(){
       };
 
       advertisingOptions.manufacturerData = compileAccelerationData(item);
-      console.log("sending", advertisingOptions);
+      console.log("sending accel", advertisingOptions);
       NRF.setAdvertising({}, advertisingOptions);         // Start advertising    
     }
   );
@@ -192,9 +290,19 @@ function autoInstanceId() {
   return new Uint8Array([ 0x00, 0x00, parseInt(address.substring(12, 14), 16),
                           parseInt(address.substring(15, 17), 16) ]);
 }
+/***********************************************
+ * END ACCELERATION AND BATTERY
+ ***********************************************/
 
 
 
+/***********************************************
+ * UTILITY CLASSES
+ ***********************************************/
+
+/***********************************************
+ * BLE QUEUE CLASS
+ ***********************************************/
 class BLEQueue {
     constructor(){
         this.queue = [];
@@ -327,7 +435,14 @@ class BLEQueue {
 
 }
 
+/***********************************************
+ * END BLE QUEUE CLASS
+ ***********************************************/
 
+
+/***********************************************
+ * DynScale CLASS
+ ***********************************************/
 // Class DynScale
 // this class is for scaling an input in an unknown range to a known output range
 // over time it assumes the lowest input received is the input minimum, 
@@ -366,6 +481,14 @@ class dynScale{
      return outval;
   }
 }
+/***********************************************
+ * END DynScale CLASS
+ ***********************************************/
+/***********************************************
+ * END UTILITY CLASSES
+ ***********************************************/
+
+
 
 
 // get things going.
